@@ -1,0 +1,29 @@
+{
+  "name": "bonding-curve-offchain",
+  "version": "1.0.0",
+  "description": "MeshJS integration for token minting and bonding curve",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "mint": "ts-node src/mint-tokens.ts",
+    "buy": "ts-node src/buy-tokens.ts",
+    "sell": "ts-node src/sell-tokens.ts"
+  },
+  "keywords": [
+    "cardano",
+    "meshjs",
+    "aiken",
+    "bonding-curve"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@meshsdk/core": "^1.6.9",
+    "@meshsdk/core-csl": "^1.6.9"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}

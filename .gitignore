@@ -1,0 +1,23 @@
+# Aiken compilation artifacts
+artifacts/
+# Aiken's project working directory
+build/
+# Aiken's default documentation export
+docs/
+
+# Node modules
+node_modules/
+offchain/node_modules/
+
+# Environment files
+.env
+offchain/.env
+
+# Build outputs
+offchain/dist/
+
+# Temporary files
+*.tmp
+*.log
+offchain/*.js
+offchain/*.js.map
