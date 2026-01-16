@@ -18,8 +18,11 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@emurgo/cardano-serialization-lib-nodejs": "^15.0.3",
     "@meshsdk/core": "^1.6.9",
-    "@meshsdk/core-csl": "^1.6.9"
+    "@meshsdk/core-csl": "^1.6.9",
+    "@types/bip39": "^2.4.2",
+    "bip39": "^3.1.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
