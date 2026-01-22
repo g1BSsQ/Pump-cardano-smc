@@ -1,207 +1,114 @@
 #!/bin/bash
-# Buy tokens on Hydra L2
 set -e
 
-echo "🚀 === Buy Tokens on Hydra L2 ==="
-echo ""
+# ============================================================================
+# 1. CONFIGURATION (Sửa tại đây)
+# ============================================================================
+USER="alice"          # Chọn "alice" hoặc "bob"
+AMOUNT_TO_BUY=2      # Số lượng token muốn mua
+
+# Cấu hình dự án PUMP.CARDANO
+export POLICY_ID="3dda0b9b89f7cfc3a7c0cdacda60abca405f4e27780f7c773ec7732a"
+export TOKEN_NAME_HEX="50554d50" 
+export ASSET_ID="${POLICY_ID}.${TOKEN_NAME_HEX}"
+export SCRIPT_ADDR="addr_test1wq7a5zum38mulsa8crx6eknq409yqh6wyauq7lrh8mrhx2smft2f0"
+export CREDENTIALS_PATH="$HOME/credentials"
+export HYDRA_API="http://127.0.0.1:4001"
+
+# Tự động nhận diện Key và Address
+BUYER_SKEY="${CREDENTIALS_PATH}/${USER}-funds.sk"
+BUYER_VKEY="${CREDENTIALS_PATH}/${USER}-funds.vk"
+BUYER_ADDR=$(cardano-cli address build --payment-verification-key-file $BUYER_VKEY --testnet-magic 1)
+BUYER_HASH=$(cardano-cli address key-hash --payment-verification-key-file $BUYER_VKEY)
+
+echo "👤 Signer: $USER | Mua: $AMOUNT_TO_BUY PUMP"
 
 # ============================================================================
-# CONFIGURATION
+# 2. SETUP & QUERY
 # ============================================================================
+# Tạo folder tmp để chứa các file tạm
+mkdir -p tmp
 
-export POOL_ADDR=addr_test1wpakws8zf5rp8gazq9h97n3zuadjvpdr0a4uvt8353s9nngwvm3h8
-export POLICY_ID=7b6740e24d0613a3a2016e5f4e22e75b2605a37f6bc62cf1a46059cd
-export TOKEN_NAME=50554d50  # PUMP in hex
-export SLOPE=1000000
-export CREDENTIALS_PATH=$HOME/credentials
-export HYDRA_API=http://127.0.0.1:4001
+echo "🔍 Đang lấy UTXO từ Hydra Head..."
+curl -s $HYDRA_API/snapshot/utxo > tmp/head-utxos.json
+curl -s $HYDRA_API/protocol-parameters > tmp/protocol-params.json
 
-# Buy parameters
-AMOUNT=${1:-1}  # Số token muốn mua (default: 1)
-MAX_COST=${2:-10000000}  # Giá tối đa chấp nhận (default: 10 ADA)
+# Tìm UTXO của Pool
+POOL_UTXO=$(jq -r "to_entries[] | select(.value.address == \"$SCRIPT_ADDR\") | .key" tmp/head-utxos.json)
+if [ -z "$POOL_UTXO" ]; then echo "❌ Pool không tồn tại trên L2"; exit 1; fi
 
-echo "📋 Configuration:"
-echo "   Pool Address: $POOL_ADDR"
-echo "   Amount to buy: $AMOUNT tokens"
-echo "   Max cost: $MAX_COST lovelace"
-echo ""
-
-# ============================================================================
-# STEP 1: Query UTxOs in Hydra Head
-# ============================================================================
-
-echo "🔍 Step 1: Querying UTxOs in Hydra Head..."
-
-curl -s $HYDRA_API/snapshot/utxo > $HOME/head-utxos.json
-
-echo "✅ Head UTxOs retrieved"
-cat $HOME/head-utxos.json | jq . | head -20
-echo ""
-
-# Find pool UTxO
-POOL_UTXO_TXIX=$(jq -r "to_entries[] | select(.value.address == \"$POOL_ADDR\") | .key" $HOME/head-utxos.json)
-
-if [ -z "$POOL_UTXO_TXIX" ]; then
-  echo "❌ Pool UTxO not found in Head"
-  exit 1
-fi
-
-echo "✅ Found pool UTxO: $POOL_UTXO_TXIX"
-
-# Parse pool datum
-POOL_DATUM=$(jq -r ".[\"$POOL_UTXO_TXIX\"].inlineDatum" $HOME/head-utxos.json)
+# Lấy dữ liệu Pool (Slope, Supply, ADA hiện tại)
+POOL_DATUM=$(jq -r ".[\"$POOL_UTXO\"].inlineDatum" tmp/head-utxos.json)
+SLOPE=$(echo $POOL_DATUM | jq -r '.fields[2].int')
 CURRENT_SUPPLY=$(echo $POOL_DATUM | jq -r '.fields[3].int')
+POOL_ADA=$(jq -r ".[\"$POOL_UTXO\"].value.lovelace" tmp/head-utxos.json)
+POOL_TOKENS=$(jq -r ".[\"$POOL_UTXO\"].value[\"$POLICY_ID\"][\"$TOKEN_NAME_HEX\"] // 0" tmp/head-utxos.json)
 
-echo "   Current supply: $CURRENT_SUPPLY"
-echo ""
+# Lấy UTXO có nhiều ADA nhất (có thể có token) làm payment
+PAYMENT_UTXO=$(jq -r "to_entries[] | select(.value.address == \"$BUYER_ADDR\") | {txix: .key, amt: .value.value.lovelace} | select(.amt > 1000000) | .txix" tmp/head-utxos.json | head -1)
+PAYMENT_ADA=$(jq -r ".[\"$PAYMENT_UTXO\"].value.lovelace" tmp/head-utxos.json)
+PAYMENT_TOKENS=$(jq -r ".[\"$PAYMENT_UTXO\"].value[\"$POLICY_ID\"][\"$TOKEN_NAME_HEX\"] // 0" tmp/head-utxos.json)
 
-# ============================================================================
-# STEP 2: Calculate cost and new supply
-# ============================================================================
+# Lấy pure ADA UTXO làm collateral
+COLLATERAL_UTXO=$(jq -r "to_entries[] | select(.value.address == \"$BUYER_ADDR\" and (.value.value | keys | length == 1)) | .key" tmp/head-utxos.json | head -1)
 
-echo "📊 Step 2: Calculating buy cost..."
-
-NEW_SUPPLY=$((CURRENT_SUPPLY + AMOUNT))
-# Cost = slope * (end² - start²) / 2
-COST=$(( SLOPE * (NEW_SUPPLY * NEW_SUPPLY - CURRENT_SUPPLY * CURRENT_SUPPLY) / 2 ))
-
-echo "   Cost: $COST lovelace"
-echo "   New supply: $NEW_SUPPLY"
-echo ""
-
-if [ $COST -gt $MAX_COST ]; then
-  echo "❌ Cost ($COST) exceeds max cost ($MAX_COST)"
-  exit 1
+if [ -z "$PAYMENT_UTXO" ] || [ -z "$COLLATERAL_UTXO" ]; then
+    echo "❌ Lỗi: Không tìm thấy đủ UTXOs (cần 1 payment + 1 collateral pure ADA)"
+    exit 1
 fi
 
 # ============================================================================
-# STEP 3: Get buyer UTxO
+# 3. LOGIC TÍNH TOÁN (ĐẢM BẢO CÂN BẰNG ADA)
 # ============================================================================
+# Tính Cost: Slope * (supply_end^2 - supply_start^2) / 2
+NEW_SUPPLY=$((CURRENT_SUPPLY + AMOUNT_TO_BUY))
+COST=$(( (SLOPE * (NEW_SUPPLY * NEW_SUPPLY - CURRENT_SUPPLY * CURRENT_SUPPLY)) / 2 ))
+MAX_COST=$(( COST * 105 / 100 ))
 
-echo "💰 Step 3: Finding buyer payment UTxO..."
+# TỔNG ADA ĐẦU VÀO = Pool ADA + Payment ADA
+TOTAL_IN=$((POOL_ADA + PAYMENT_ADA))
 
-BUYER_ADDR=$(cardano-cli address build --payment-verification-key-file ${CREDENTIALS_PATH}/bob-funds.vk --testnet-magic 1)
-
-# Find buyer UTxO in Head (pure ADA)
-BUYER_UTXO_TXIX=$(jq -r "to_entries[] | select(.value.address == \"$BUYER_ADDR\" and (.value.value | keys | length == 1)) | .key" $HOME/head-utxos.json | head -1)
-
-if [ -z "$BUYER_UTXO_TXIX" ]; then
-  echo "❌ No buyer payment UTxO found in Head"
-  exit 1
-fi
-
-BUYER_UTXO_VALUE=$(jq -r ".[\"$BUYER_UTXO_TXIX\"].value.lovelace" $HOME/head-utxos.json)
-echo "✅ Buyer UTxO: $BUYER_UTXO_TXIX ($BUYER_UTXO_VALUE lovelace)"
-echo ""
-
-# ============================================================================
-# STEP 4: Create Buy redeemer and new datum
-# ============================================================================
-
-echo "🔨 Step 4: Creating redeemer and datum..."
-
-# Buy redeemer (constructor 1)
-cat > $HOME/buy-redeemer-l2.json << EOF
-{"constructor":1,"fields":[{"int":$AMOUNT},{"int":$MAX_COST}]}
-EOF
-
-# New pool datum (supply updated)
-cat > $HOME/new-pool-datum-l2.json << EOF
-{
-  "constructor": 0,
-  "fields": [
-    {"bytes": "$POLICY_ID"},
-    {"bytes": "$TOKEN_NAME"},
-    {"int": $SLOPE},
-    {"int": $NEW_SUPPLY},
-    {"bytes": "a0abf91dee3e17b3b3091bbc4acdd395209b7925fd62f147aae85416"}
-  ]
-}
-EOF
-
-echo "✅ Redeemer and datum created"
-echo ""
-
-# ============================================================================
-# STEP 5: Build Buy transaction
-# ============================================================================
-
-echo "🔧 Step 5: Building Buy transaction..."
-
-# Get current pool values
-POOL_ADA=$(jq -r ".[\"$POOL_UTXO_TXIX\"].value.lovelace" $HOME/head-utxos.json)
-POOL_TOKENS=$(jq -r ".[\"$POOL_UTXO_TXIX\"].value[\"$POLICY_ID\"][\"$TOKEN_NAME\"]" $HOME/head-utxos.json)
-
-# Calculate new values
+# TỔNG ADA ĐẦU RA (Phải bằng TOTAL_IN vì fee = 0)
 NEW_POOL_ADA=$((POOL_ADA + COST))
-NEW_POOL_TOKENS=$((POOL_TOKENS - AMOUNT))
-NEW_BUYER_ADA=$((BUYER_UTXO_VALUE - COST - 200000))  # 200000 for min output
+NEW_BUYER_ADA=$((TOTAL_IN - NEW_POOL_ADA))
 
-echo "   Pool: $POOL_ADA → $NEW_POOL_ADA lovelace"
-echo "   Pool tokens: $POOL_TOKENS → $NEW_POOL_TOKENS"
-echo ""
+# Token balance: Payment UTXO có thể đã có token
+NEW_BUYER_TOKENS=$((PAYMENT_TOKENS + AMOUNT_TO_BUY))
+
+echo "💹 Cost: $COST lovelace. Cân bằng ví: $TOTAL_IN lovelace."
+echo "💹 Tokens: Payment có $PAYMENT_TOKENS, mua thêm $AMOUNT_TO_BUY → tổng $NEW_BUYER_TOKENS"
+
+# ============================================================================
+# 4. BUILD TX
+# ============================================================================
+# Tạo datum file
+jq -n --arg pol "$POLICY_ID" --argjson sup $NEW_SUPPLY --arg cre "a0abf91dee3e17b3b3091bbc4acdd395209b7925fd62f147aae85416" \
+  '{"constructor":0,"fields":[{"bytes":$pol},{"bytes":"50554d50"},{"int":1000000},{"int":$sup},{"bytes":$cre}]}' > tmp/new-datum.json
+
+# Tạo redeemer file
+jq -n --argjson amt $AMOUNT_TO_BUY --argjson max $MAX_COST \
+  '{"constructor":1,"fields":[{"int":$amt},{"int":$max}]}' > tmp/buy-redeemer.json
 
 # Build transaction
 cardano-cli conway transaction build-raw \
-  --tx-in $POOL_UTXO_TXIX \
-  --tx-in-script-file $HOME/pump-spend.plutus \
+  --protocol-params-file tmp/protocol-params.json \
+  --tx-in $POOL_UTXO \
+  --tx-in-script-file ~/pump-spend.plutus \
   --tx-in-inline-datum-present \
-  --tx-in-redeemer-file $HOME/buy-redeemer-l2.json \
-  --tx-in-execution-units '(14000000, 10000000000)' \
-  --tx-in $BUYER_UTXO_TXIX \
-  --tx-out "$POOL_ADDR+$NEW_POOL_ADA+$NEW_POOL_TOKENS $POLICY_ID.$TOKEN_NAME" \
-  --tx-out-inline-datum-file $HOME/new-pool-datum-l2.json \
-  --tx-out "$BUYER_ADDR+$NEW_BUYER_ADA+$AMOUNT $POLICY_ID.$TOKEN_NAME" \
+  --tx-in-redeemer-file tmp/buy-redeemer.json \
+  --tx-in-execution-units '(10000000000, 16500000)' \
+  --tx-in $PAYMENT_UTXO \
+  --tx-in-collateral $COLLATERAL_UTXO \
+  --tx-out "$SCRIPT_ADDR + $NEW_POOL_ADA lovelace + $((POOL_TOKENS - AMOUNT_TO_BUY)) $ASSET_ID" \
+  --tx-out-inline-datum-file tmp/new-datum.json \
+  --tx-out "$BUYER_ADDR + $NEW_BUYER_ADA lovelace + $NEW_BUYER_TOKENS $ASSET_ID" \
   --fee 0 \
-  --out-file $HOME/buy-tx-l2.json
-
-echo "✅ Transaction built"
-echo ""
+  --out-file tmp/tx-body.json
 
 # ============================================================================
-# STEP 6: Sign transaction
+# 5. KÝ VÀ SUBMIT
 # ============================================================================
+cardano-cli conway transaction sign --tx-body-file tmp/tx-body.json --signing-key-file $BUYER_SKEY --out-file tmp/tx-signed.json
 
-echo "✍️  Step 6: Signing transaction..."
-
-cardano-cli conway transaction sign \
-  --tx-body-file $HOME/buy-tx-l2.json \
-  --signing-key-file ${CREDENTIALS_PATH}/bob-funds.sk \
-  --out-file $HOME/buy-tx-l2-signed.json
-
-echo "✅ Transaction signed"
-echo ""
-
-# ============================================================================
-# STEP 7: Submit to Hydra
-# ============================================================================
-
-echo "📤 Step 7: Submitting transaction to Hydra Head..."
-
-# Get CBOR
-TX_CBOR=$(jq -r '.cborHex' $HOME/buy-tx-l2-signed.json)
-
-# Submit via Hydra API
-curl -X POST \
-  -H "Content-Type: application/json" \
-  -d "{\"tag\":\"NewTx\",\"transaction\":{\"cborHex\":\"$TX_CBOR\",\"type\":\"Tx ConwayEra\"}}" \
-  $HYDRA_API \
-  | jq .
-
-echo ""
-echo "✅ Transaction submitted to Hydra Head!"
-echo ""
-
-# ============================================================================
-# SUMMARY
-# ============================================================================
-
-echo "🎉 === Buy Transaction Completed ==="
-echo ""
-echo "📊 Summary:"
-echo "   Bought: $AMOUNT PUMP tokens"
-echo "   Cost: $COST lovelace"
-echo "   New supply: $NEW_SUPPLY"
-echo ""
-echo "💡 Check Head status:"
-echo "   curl -s $HYDRA_API/snapshot/utxo | jq ."
+echo "📤 Submitting to Hydra L2..."
+curl -s -X POST $HYDRA_API/transaction --data @tmp/tx-signed.json | jq .
