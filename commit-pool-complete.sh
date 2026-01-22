@@ -12,7 +12,7 @@ echo ""
 # ============================================================================
 
 export CARDANO_NODE_SOCKET_PATH=/home/g1bssq/node.socket
-export POOL_ADDR=addr_test1wr2qkhafaucs5zpt7uxhdaxw7004nce6q2kwyg8744y8w2cwuqs0u
+export POOL_ADDR=addr_test1wq7a5zum38mulsa8crx6eknq409yqh6wyauq7lrh8mrhx2smft2f0
 export CREDENTIALS_PATH=$HOME/credentials
 export TESTNET_MAGIC=1
 
@@ -71,7 +71,7 @@ cardano-cli conway transaction build-raw \
   --tx-in-inline-datum-present \
   --tx-in-redeemer-file $HOME/commit-redeemer.json \
   --tx-in-execution-units '(1000000, 200000000)' \
-  --tx-out "$DUMMY_ADDR+5000000+1000000 d40b5fa9ef310a082bf70d76f4cef3df59e33a02ace220fead48772b.50554d50" \
+  --tx-out "$DUMMY_ADDR+5000000+1000000 3dda0b9b89f7cfc3a7c0cdacda60abca405f4e27780f7c773ec7732a.50554d50" \
   --fee 0 \
   --out-file $HOME/blueprint-tx.json
 

@@ -17,8 +17,8 @@ const MINT_TX_HASH = '96e74ecc71e1a850552583ec6d54441300c0ea3ba7d5e7f8a025fe8949
 
 // Cách 2: Hoặc chỉ định trực tiếp UTXO parameters
 const MANUAL_UTXO_PARAMS = {
-  utxoTxHash: '0e7157c249268b74e00fa673c70ee517f8f93831c480705db546182f6070dfe5',
-  utxoOutputIndex: 2,
+  utxoTxHash: 'c40cd55cec6ebd6fbc8575d51dc0a0f92c19f426b4cef60da85cb8b4bbb35fe7',
+  utxoOutputIndex: 1,
 };
 
 const USE_MANUAL = true; // Set true nếu muốn dùng MANUAL_UTXO_PARAMS
