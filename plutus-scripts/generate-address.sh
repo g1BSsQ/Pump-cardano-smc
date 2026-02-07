@@ -4,7 +4,7 @@
 # Cardano CLI Script Address Generation
 # ============================================================================
 
-CARDANO_TESTNET_MAGIC=1
+CARDANO_TESTNET_MAGIC=1  # 1 = Preprod, 2 = Preview
 
 # Generate mint policy ID
 echo "🏦 Generating mint policy ID..."

@@ -82,7 +82,7 @@ function getPumpScript(utxoRef: { txHash: string; outputIndex: number }) {
 
 async function createPumpPool() {
   try {
-    console.log('\n🚀 Creating Pump.fun Pool with Bonding Curve...\n');
+    console.log('\n🚀 Creating Pump.fun Pool with Constant Product AMM...\n');
 
     // 1. Get wallet address and UTxOs
     const walletAddress = await wallet.getChangeAddress();
@@ -112,7 +112,7 @@ async function createPumpPool() {
 
     // 4. Define token to mint
     const tokenName = 'PUMP';
-    const tokenQuantity = '1000000'; // 1M tokens
+    const tokenQuantity = '1000000000'; // 1B tokens
     const assetName = Buffer.from(tokenName).toString('hex');
 
     console.log(`🪙 Minting ${parseInt(tokenQuantity).toLocaleString()}x ${tokenName}...`);
@@ -121,14 +121,13 @@ async function createPumpPool() {
     const ownerPubKeyHash = deserializeAddress(walletAddress).pubKeyHash;
     
     // Create Pool Datum
-    // PoolDatum { token_policy, token_name, slope, current_supply, creator }
-    const slope = 1_000_000; // 1 ADA per unit supply
+    // PoolDatum { token_policy, token_name, current_supply, creator }
+    // Note: platform_address and fee_basis_points are hardcoded in contract
     const initialSupply = 0; // Pool starts with 0 supply (nothing sold yet)
     
     const poolDatum = mConStr0([
       policyId,           // token_policy (PolicyId)
       assetName,          // token_name (ByteArray hex)
-      slope,              // slope (Int)
       initialSupply,      // current_supply (Int) - starts at 0
       ownerPubKeyHash,    // creator (ByteArray)
     ]);
@@ -136,8 +135,10 @@ async function createPumpPool() {
     console.log('📊 Pool Configuration:');
     console.log(`   Total Supply: ${parseInt(tokenQuantity).toLocaleString()}`);
     console.log(`   Initial Circulating: 0 (all locked in pool)`);
-    console.log(`   Slope: ${slope.toLocaleString()} lovelace`);
-    console.log(`   Formula: Price = ${(slope / 1_000_000)} ADA × Supply`);
+    console.log(`   Platform Fee: 1% (hardcoded in contract)`);
+    console.log(`   Formula: Constant Product AMM with Virtual Reserves`);
+    console.log(`   Virtual ADA: 30,000 ADA`);
+    console.log(`   Virtual Token: 300M tokens`);
 
     // 5. Build transaction
     console.log('\n🔨 Building transaction...');
@@ -192,9 +193,9 @@ async function createPumpPool() {
         collateralUtxo.output.amount,
         collateralUtxo.output.address
       )
-      // Send all minted tokens to pool with 5 ADA minimum
+      // Send all minted tokens to pool with 2 ADA minimum
       .txOut(scriptAddress, [
-        { unit: 'lovelace', quantity: '5000000' },  // 5 ADA minimum
+        { unit: 'lovelace', quantity: '2000000' },  // 2 ADA minimum
         { unit: policyId + assetName, quantity: tokenQuantity }  // All minted tokens
       ])
       .txOutInlineDatumValue(poolDatum)
@@ -222,10 +223,15 @@ async function createPumpPool() {
     console.log(`   Asset ID: ${policyId}${assetName}`);
     console.log(`\n🏊 Pool Address (Buy/Sell here):`);
     console.log(`   ${scriptAddress}`);
-    console.log(`\n💹 Bonding Curve Formula: Price = ${slope / 1_000_000} ADA × Supply`);
-    console.log(`   Token #100 price: ${(slope * 100 / 1_000_000).toFixed(2)} ADA`);
-    console.log(`   Token #1000 price: ${(slope * 1000 / 1_000_000).toFixed(2)} ADA`);
-    console.log(`   Token #10000 price: ${(slope * 10000 / 1_000_000).toFixed(2)} ADA`);
+    console.log(`\n📈 Constant Product AMM (x*y=k):`);
+    console.log(`   Virtual ADA Reserve: 30,000 ADA`);
+    console.log(`   Virtual Token Reserve: 300,000,000 tokens`);
+    console.log(`   Real Token Reserve: 1,000,000,000 tokens`);
+    console.log(`   Platform Fee: 1% (hardcoded)`);
+    console.log(`\n💡 Price Discovery:`);
+    console.log(`   Initial price starts near ~0 (due to large virtual reserves)`);
+    console.log(`   Price increases as tokens are bought from the pool`);
+    console.log(`   Graduation at 1B tokens sold → DEX listing`);
 
   } catch (error) {
     console.error('\n❌ Error:', error);

@@ -17,8 +17,8 @@ const MINT_TX_HASH = '96e74ecc71e1a850552583ec6d54441300c0ea3ba7d5e7f8a025fe8949
 
 // Cách 2: Hoặc chỉ định trực tiếp UTXO parameters
 const MANUAL_UTXO_PARAMS = {
-  utxoTxHash: 'c40cd55cec6ebd6fbc8575d51dc0a0f92c19f426b4cef60da85cb8b4bbb35fe7',
-  utxoOutputIndex: 1,
+  utxoTxHash: 'e23de32fdae946759feb1e3f6dae6241d591c221fb874bfe2e0644d0b0e02552',
+  utxoOutputIndex: 5,
 };
 
 const USE_MANUAL = true; // Set true nếu muốn dùng MANUAL_UTXO_PARAMS
@@ -121,7 +121,7 @@ async function generatePlutusFiles() {
 # Cardano CLI Script Address Generation
 # ============================================================================
 
-CARDANO_TESTNET_MAGIC=1
+CARDANO_TESTNET_MAGIC=1  # 1 = Preprod, 2 = Preview
 
 # Generate mint policy ID
 echo "🏦 Generating mint policy ID..."

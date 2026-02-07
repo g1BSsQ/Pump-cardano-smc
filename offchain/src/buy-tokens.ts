@@ -3,11 +3,11 @@ import {
   MeshWallet,
   MeshTxBuilder,
   PlutusScript,
-  serializePlutusScript,
   applyParamsToScript,
   mConStr0,
   mConStr1,
   deserializeDatum,
+  deserializeAddress,
 } from '@meshsdk/core';
 import blueprint from '../../plutus.json';
 
@@ -35,20 +35,30 @@ const wallet = new MeshWallet({
 });
 
 // ============================================================================
-// CONFIG - CẬP NHẬT THÔNG TIN POOL CỦA BẠN
+// AMM CONSTANTS (Must match smart contract)
+// ============================================================================
+
+const MAX_SUPPLY = 1_000_000_000; // 1B tokens
+const VIRTUAL_ADA = 30_000_000_000; // 30B lovelace
+const VIRTUAL_TOKEN = 300_000_000; // 300M tokens
+const PLATFORM_FEE_BASIS_POINTS = 100; // 1%
+const PLATFORM_ADDRESS = 'addr_test1vpvzw8hw8c30svltxx37pfzrq0gpws28w9z3zsqtqqskxscahns3q';
+
+// ============================================================================
+// POOL CONFIG - CẬP NHẬT THÔNG TIN POOL CỦA BẠN
 // ============================================================================
 
 const POOL_CONFIG = {
-  policyId: '4c300520bc731cd1467d63642f61312b2c4e5a17d8dba3d3fa95e258',
+  policyId: '6351797c3ac7d53ddb1fffc70bb2598e7eea9e69336cf5a5e6a12cd5',
   tokenName: 'PUMP',
-  scriptAddress: 'addr_test1wpxrqpfqh3e3e52x043kgtmpxy4jcnj6zlvdhg7nl227ykq3jq7sv',
+  scriptAddress: 'addr_test1wp34z7tu8tra20wmrlluwzajtx88a657dyekead9u6sje4gt2e58c',
   // UTXO được dùng khi tạo pool (one-shot parameters)
-  utxoTxHash: '13181542efaa356afae7ef83d87e85801412f89056fc9814df39baf6a8ddec9f',
-  utxoOutputIndex: 1,
+  utxoTxHash: 'f82e55143acc1a7d68cf634562fe56c1a231d10ba7b13003a7747ad28f10895d',
+  utxoOutputIndex: 0,
 };
 
 // Số lượng token muốn mua
-const AMOUNT_TO_BUY = 5; // Giảm từ 100 xuống 10
+const AMOUNT_TO_BUY = 1000000; // 1M tokens
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -78,48 +88,55 @@ function getPumpScript(utxoTxHash: string, utxoOutputIndex: number): PlutusScrip
 }
 
 /**
- * Calculate bonding curve cost
- * Cost = Slope × (supply_end² - supply_start²) / 2
+ * Calculate expected ADA reserve using AMM formula
+ * Formula: expected_ada = (k / (max_supply - current_supply + virtual_token)) - virtual_ada
+ * Where k = virtual_ada * (max_supply + virtual_token)
  */
-function calculateCost(slope: number, supplyStart: number, supplyEnd: number): number {
-  const endSquared = supplyEnd * supplyEnd;
-  const startSquared = supplyStart * supplyStart;
-  return Math.floor((slope * (endSquared - startSquared)) / 2);
+function getExpectedAdaReserve(currentSupply: number): number {
+  const k = VIRTUAL_ADA * (MAX_SUPPLY + VIRTUAL_TOKEN);
+  const realTokenReserve = MAX_SUPPLY - currentSupply;
+  const totalTokenReserve = realTokenReserve + VIRTUAL_TOKEN;
+  
+  if (totalTokenReserve <= 0) {
+    return 999_999_999_999_999;
+  }
+  
+  const totalAdaReserve = Math.floor(k / totalTokenReserve);
+  const realAdaReserve = totalAdaReserve - VIRTUAL_ADA;
+  
+  return realAdaReserve < 0 ? 0 : realAdaReserve;
 }
 
 /**
- * Parse PoolDatum from chain
+ * Calculate buy cost
+ * cost = expected_ada(new_supply) - expected_ada(current_supply)
+ */
+function calculateBuyCost(currentSupply: number, amount: number): {
+  exactCost: number;
+  fee: number;
+  totalCost: number;
+} {
+  const newSupply = currentSupply + amount;
+  const currentAdaReserve = getExpectedAdaReserve(currentSupply);
+  const newAdaReserve = getExpectedAdaReserve(newSupply);
+  const exactCost = newAdaReserve - currentAdaReserve;
+  const fee = Math.floor((exactCost * PLATFORM_FEE_BASIS_POINTS) / 10000);
+  const totalCost = exactCost + fee;
+  
+  return { exactCost, fee, totalCost };
+}
+
+/**
+ * Parse PoolDatum from chain (NEW FORMAT)
+ * PoolDatum { token_policy, token_name, current_supply, creator }
  */
 function parsePoolDatum(datum: any) {
   const fields = datum.fields;
   return {
     token_policy: fields[0].bytes,
     token_name: Buffer.from(fields[1].bytes, 'hex').toString('utf8'),
-    slope: fields[2].int,
-    current_supply: fields[3].int,
-    creator: fields[4].bytes,
-  };
-}
-
-/**
- * Build new PoolDatum
- */
-function buildPoolDatum(
-  policyId: string,
-  tokenName: string,
-  slope: number,
-  currentSupply: number,
-  creator: string
-) {
-  return {
-    constructor: 0,
-    fields: [
-      { bytes: policyId },
-      { bytes: Buffer.from(tokenName, 'utf8').toString('hex') },
-      { int: slope },
-      { int: currentSupply },
-      { bytes: creator },
-    ],
+    current_supply: Number(fields[2].int),
+    creator: fields[3].bytes,
   };
 }
 
@@ -129,7 +146,7 @@ function buildPoolDatum(
 
 async function buyTokens() {
   try {
-    console.log('\n💰 === Buying Tokens from Pump Pool ===\n');
+    console.log('\n💰 === Buying Tokens from Pump Pool (AMM) ===\n');
 
     const walletAddress = await wallet.getChangeAddress();
     console.log('📍 Buyer Address:', walletAddress);
@@ -150,19 +167,27 @@ async function buyTokens() {
     const datumCbor = poolUtxo.output.plutusData as string;
     const datum = deserializeDatum(datumCbor);
     const poolDatum = parsePoolDatum(datum);
+    
     console.log('\n📊 Current Pool State:');
     console.log(`   Token: ${poolDatum.token_name}`);
-    console.log(`   Current Supply (sold): ${poolDatum.current_supply.toLocaleString()}`);
-    console.log(`   Slope: ${poolDatum.slope.toLocaleString()} lovelace`);
+    console.log(`   Current Supply (sold): ${poolDatum.current_supply.toLocaleString()} / ${MAX_SUPPLY.toLocaleString()}`);
+    console.log(`   Remaining: ${(MAX_SUPPLY - poolDatum.current_supply).toLocaleString()}`);
 
-    // 3. Calculate cost and new supply
+    // 3. Calculate cost using AMM
     const newSupply = poolDatum.current_supply + AMOUNT_TO_BUY;
-    const cost = calculateCost(poolDatum.slope, poolDatum.current_supply, newSupply);
+    
+    if (newSupply > MAX_SUPPLY) {
+      throw new Error(`❌ Cannot buy ${AMOUNT_TO_BUY.toLocaleString()} tokens. Only ${(MAX_SUPPLY - poolDatum.current_supply).toLocaleString()} remaining!`);
+    }
+    
+    const { exactCost, fee, totalCost } = calculateBuyCost(poolDatum.current_supply, AMOUNT_TO_BUY);
 
-    console.log('\n💹 Transaction Details:');
+    console.log('\n💹 AMM Calculation:');
     console.log(`   New Supply: ${newSupply.toLocaleString()}`);
-    console.log(`   Cost: ${cost.toLocaleString()} lovelace (${(cost / 1_000_000).toFixed(6)} ADA)`);
-    console.log(`   Average Price: ${((cost / AMOUNT_TO_BUY) / 1_000_000).toFixed(6)} ADA per token`);
+    console.log(`   Exact Cost: ${exactCost.toLocaleString()} lovelace (${(exactCost / 1_000_000).toFixed(6)} ADA)`);
+    console.log(`   Platform Fee (1%): ${fee.toLocaleString()} lovelace (${(fee / 1_000_000).toFixed(6)} ADA)`);
+    console.log(`   Total Cost: ${totalCost.toLocaleString()} lovelace (${(totalCost / 1_000_000).toFixed(6)} ADA)`);
+    console.log(`   Average Price: ${((totalCost / AMOUNT_TO_BUY) / 1_000_000).toFixed(9)} ADA per token`);
 
     // 4. Get current pool balances
     const assetName = Buffer.from(POOL_CONFIG.tokenName, 'utf8').toString('hex');
@@ -175,23 +200,22 @@ async function buyTokens() {
       poolUtxo.output.amount.find((a: any) => a.unit === assetId)?.quantity || '0'
     );
 
-    console.log('\n📦 Pool Balances:');
-    console.log(`   ADA: ${currentAda.toLocaleString()} → ${(currentAda + cost).toLocaleString()}`);
+    console.log('\n📦 Pool Balance Changes:');
+    console.log(`   ADA: ${currentAda.toLocaleString()} → ${(currentAda + exactCost).toLocaleString()}`);
     console.log(`   Tokens: ${currentTokens.toLocaleString()} → ${(currentTokens - AMOUNT_TO_BUY).toLocaleString()}`);
 
-    // 5. Calculate slippage protection (5% tolerance)
-    const slippageTolerance = 0.05; // 5%
-    const maxCost = Math.floor(cost * (1 + slippageTolerance));
+    // 5. Calculate slippage protection (2% tolerance)
+    const slippageTolerance = 0.02; // 2%
+    const maxCostLimit = Math.floor(totalCost * (1 + slippageTolerance));
     
     console.log(`\n🛡️  Slippage Protection:`);
-    console.log(`   Expected Cost: ${cost.toLocaleString()} lovelace`);
-    console.log(`   Max Cost (5% slippage): ${maxCost.toLocaleString()} lovelace`);
+    console.log(`   Expected Total: ${totalCost.toLocaleString()} lovelace`);
+    console.log(`   Max Cost Limit (2% slippage): ${maxCostLimit.toLocaleString()} lovelace`);
 
-    // 6. Build new datum
+    // 6. Build new datum (NEW FORMAT - no slope)
     const newDatum = mConStr0([
       poolDatum.token_policy,
       Buffer.from(poolDatum.token_name, 'utf8').toString('hex'),
-      poolDatum.slope,
       newSupply,
       poolDatum.creator,
     ]);
@@ -220,8 +244,8 @@ async function buyTokens() {
       submitter: blockchainProvider,
     });
 
-    // Buy redeemer với slippage protection
-    const buyRedeemer = mConStr1([AMOUNT_TO_BUY, maxCost]);
+    // Buy redeemer: Buy { amount: Int, max_cost_limit: Int }
+    const buyRedeemer = mConStr1([AMOUNT_TO_BUY, maxCostLimit]);
 
     await txBuilder
       // Spend pool UTXO
@@ -242,12 +266,16 @@ async function buyTokens() {
         collateralUtxo.output.amount,
         collateralUtxo.output.address
       )
-      // Pool continuing output (more ADA, less tokens)
+      // Pool continuing output (more ADA, fewer tokens)
       .txOut(POOL_CONFIG.scriptAddress, [
-        { unit: 'lovelace', quantity: (currentAda + cost).toString() },
+        { unit: 'lovelace', quantity: (currentAda + exactCost).toString() },
         { unit: assetId, quantity: (currentTokens - AMOUNT_TO_BUY).toString() },
       ])
       .txOutInlineDatumValue(newDatum)
+      // Platform fee output
+      .txOut(PLATFORM_ADDRESS, [
+        { unit: 'lovelace', quantity: fee.toString() },
+      ])
       // Buyer receives tokens
       .txOut(walletAddress, [
         { unit: assetId, quantity: AMOUNT_TO_BUY.toString() },
@@ -258,7 +286,7 @@ async function buyTokens() {
 
     console.log('✅ Transaction built');
 
-    // 9. Sign and submit
+    // 10. Sign and submit
     console.log('✍️  Signing transaction...');
     const signedTx = await wallet.signTx(txBuilder.txHex);
 
@@ -270,10 +298,13 @@ async function buyTokens() {
     console.log('🔗 View on Cardanoscan:');
     console.log(`   https://preprod.cardanoscan.io/transaction/${txHash}`);
     console.log(`\n💰 You received: ${AMOUNT_TO_BUY.toLocaleString()} ${POOL_CONFIG.tokenName}`);
-    console.log(`💸 You paid: ${(cost / 1_000_000).toFixed(6)} ADA`);
+    console.log(`💸 You paid: ${(totalCost / 1_000_000).toFixed(6)} ADA (including ${(fee / 1_000_000).toFixed(6)} ADA fee)`);
     console.log(`\n📊 New Pool State:`);
     console.log(`   Supply: ${poolDatum.current_supply.toLocaleString()} → ${newSupply.toLocaleString()}`);
-    console.log(`   Current Price: ${((poolDatum.slope * newSupply) / 1_000_000).toFixed(6)} ADA per token`);
+    
+    // Calculate new price
+    const nextCost = calculateBuyCost(newSupply, 1);
+    console.log(`   Current Price: ${(nextCost.totalCost / 1_000_000).toFixed(9)} ADA per token`);
 
   } catch (error) {
     console.error('\n❌ Error:', error);
