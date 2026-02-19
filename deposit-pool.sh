@@ -1,6 +1,6 @@
 #!/bin/bash
 # Complete script to deposit pool UTxO to Hydra Head (Incremental Deposit)
-# VERSION: PERMISSIONLESS & SECURE (Datum fields removed)
+# VERSION: SIMPLIFIED REDEEMER (Matches new pump.ak) + POSIX Deadline for Hydra
 
 set -e
 
@@ -11,12 +11,15 @@ echo ""
 # SETUP
 # ============================================================================
 
+# Detect script directory để tự động tìm plutus-scripts
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
 export CARDANO_NODE_SOCKET_PATH=/home/g1bssq/node.socket
-# Đảm bảo đây là địa chỉ Pool MỚI NHẤT (sau khi build lại và mint lại)
-export POOL_ADDR=addr_test1wr2sdxpl7x2saecl6w4u2s23cxvs69kd8kpt26xgzzyxvnq2y2vsk
+# Tự động đọc địa chỉ Pool từ file plutus-scripts/pump-script.addr
+export POOL_ADDR=$(cat "$SCRIPT_DIR/plutus-scripts/pump-script.addr")
 export CREDENTIALS_PATH=$HOME/credentials
 export TESTNET_MAGIC=1
-export SCRIPT_FILE=$HOME/pump-spend.plutus
+export SCRIPT_FILE="$SCRIPT_DIR/plutus-scripts/pump-spend.plutus"
 
 echo "📋 Configuration:"
 echo "   Pool Address: $POOL_ADDR"
@@ -91,47 +94,136 @@ echo "   Quantity:  $TOKEN_QUANTITY"
 # Creator Hash
 CREATOR_HASH=$(cardano-cli address key-hash --payment-verification-key-file ${CREDENTIALS_PATH}/bob-funds.vk)
 
-# --- REDEEMER (RỖNG) ---
-# Action DepositToHydra không có tham số
-cat > $HOME/deposit-redeemer.json << EOF
-{"constructor":3,"fields":[]}
-EOF
+# --- Extract lovelace amount từ UTxO ---
+LOVELACE_AMOUNT=$(echo "$VALUE_JSON" | jq -r '.lovelace // 0')
+echo "💰 Lovelace Amount: $LOVELACE_AMOUNT"
 
-DUMMY_ADDR=$(cardano-cli address build --payment-verification-key-file ${CREDENTIALS_PATH}/bob-funds.vk --testnet-magic $TESTNET_MAGIC)
+# --- CHECK DATUM (để preserve cấu trúc PoolDatum) ---
+CURRENT_DATUM=$(echo "$UTXO_JSON" | jq -r ".\"${SCRIPT_UTXO_TXIX}\".inlineDatum")
+if [ "$CURRENT_DATUM" == "null" ] || [ -z "$CURRENT_DATUM" ]; then
+    echo "❌ ERROR: No inline datum found in pool UTxO!"
+    exit 1
+fi
+
+# Extract datum fields theo cấu trúc PoolDatum trong pump.ak
+DATUM_TOKEN_POLICY=$(echo "$CURRENT_DATUM" | jq -r '.fields[0].bytes')
+DATUM_TOKEN_NAME=$(echo "$CURRENT_DATUM" | jq -r '.fields[1].bytes')
+CURRENT_SUPPLY=$(echo "$CURRENT_DATUM" | jq -r '.fields[2].int // 0')
+DATUM_CREATOR=$(echo "$CURRENT_DATUM" | jq -r '.fields[3].bytes')
+
+echo "📊 Pool Datum Info:"
+echo "   Token Policy: $DATUM_TOKEN_POLICY"
+echo "   Token Name: $DATUM_TOKEN_NAME"
+echo "   Current Supply: $CURRENT_SUPPLY"
+echo "   Creator: $DATUM_CREATOR"
+
+# Kiểm tra xem các giá trị có hợp lệ không
+if [ -z "$DATUM_TOKEN_POLICY" ] || [ "$DATUM_TOKEN_POLICY" == "null" ]; then
+    echo "❌ ERROR: Failed to extract token_policy from datum!"
+    echo "Current datum:"
+    echo "$CURRENT_DATUM" | jq '.'
+    exit 1
+fi
+
+# --- TẠO DATUM ĐÚNG CẤU TRÚC PoolDatum (DÙNG JQ AN TOÀN) ---
+# Theo pump.ak: { token_policy, token_name, current_supply, creator }
+STRICT_DATUM="{
+  \"constructor\": 0,
+  \"fields\": [
+    { \"bytes\": \"$DATUM_TOKEN_POLICY\" },
+    { \"bytes\": \"$DATUM_TOKEN_NAME\" },
+    { \"int\": $CURRENT_SUPPLY },
+    { \"bytes\": \"$DATUM_CREATOR\" }
+  ]
+}"
+
+echo "Checking JSON String: $STRICT_DATUM"
+
+echo "✅ Pool Datum created successfully"
+echo "$STRICT_DATUM" > $HOME/pool-datum.json
+
+# KỸ THUẬT CHỐT HẠ: Tạo trực tiếp CBOR Hex cho Plutus Constr 0
+# d879 = Tag 121 (Constr 0), 9f = Bắt đầu List, ff = Kết thúc List
+# 581c = Bytes độ dài 28 (Policy & Creator), 44 = Bytes độ dài 4 (PUMP)
+# 00 = Integer 0
+CBOR_HEX="d8799f581c${DATUM_TOKEN_POLICY}44${DATUM_TOKEN_NAME}00581c${DATUM_CREATOR}ff"
+
+# Chuyển Hex thành file nhị phân chuẩn Cardano
+echo "$CBOR_HEX" | xxd -r -p > $HOME/pool-datum.cbor
+echo "✅ Binary CBOR Datum created (Force Constructor 0)"
+
+# --- REDEEMER (DepositToHydra - Constructor 1, no fields) ---
+cat > $HOME/deposit-redeemer.json << EOF
+{"constructor":1,"fields":[]}
+EOF
 
 # Build Blueprint
 cardano-cli conway transaction build-raw \
   --tx-in $SCRIPT_UTXO_TXIX \
-  --tx-in-script-file $SCRIPT_FILE \
+  --tx-in-script-file "$SCRIPT_FILE" \
   --tx-in-inline-datum-present \
-  --tx-in-redeemer-file $HOME/deposit-redeemer.json \
+  --tx-in-redeemer-file "$HOME/deposit-redeemer.json" \
   --tx-in-execution-units '(6000000, 2000000000)' \
-  --tx-out "$DUMMY_ADDR+2000000+$TOKEN_QUANTITY $ASSET_ID" \
+  --tx-out "$POOL_ADDR+12000000+$TOKEN_QUANTITY $ASSET_ID" \
+  --tx-out-inline-datum-cbor-file "$HOME/pool-datum.cbor" \
   --required-signer-hash $CREATOR_HASH \
   --fee 0 \
-  --out-file $HOME/deposit-blueprint.json
+  --out-file "$HOME/deposit-blueprint.json"
 
 echo "✅ Blueprint transaction created"
 echo ""
 
 # ============================================================================
-# STEP 3 & 4: Create Request
+# STEP 3: Inject Script & Create Request (NO CHAIN WAIT!)
 # ============================================================================
 
-echo "📦 Step 3: Creating deposit request..."
+echo "📦 Step 3: Injecting script directly into deposit request..."
+
+# Lấy CBOR hex từ file .plutus
+SCRIPT_CBOR=$(jq -r '.cborHex' "$SCRIPT_FILE")
+
+if [ -z "$SCRIPT_CBOR" ] || [ "$SCRIPT_CBOR" == "null" ]; then
+    echo "❌ Failed to extract script CBOR from $SCRIPT_FILE"
+    exit 1
+fi
+
+echo "✅ Script CBOR extracted (${#SCRIPT_CBOR} chars)"
+
+# Inject script vào UTxO JSON để Hydra node biết validator
+# Hydra cần script để giả lập transaction, không cần reference script on-chain
+UPDATED_UTXO=$(echo "$UTXO_JSON" | jq --arg cbor "$SCRIPT_CBOR" '
+  to_entries | map(
+    .value += {
+      "referenceScript": {
+        "script": {
+          "cborHex": $cbor,
+          "description": "",
+          "type": "PlutusScriptV3"
+        }
+      }
+    }
+  ) | from_entries
+')
+
+echo "✅ Script injected into UTxO"
+
+# Tạo deposit request với script đã inject
 BLUEPRINT_JSON=$(cat $HOME/deposit-blueprint.json)
 
 jq -n \
-  --argjson utxo "${UTXO_JSON}" \
+  --argjson utxo "${UPDATED_UTXO}" \
   --argjson blueprintTx "${BLUEPRINT_JSON}" \
   '{ "utxo": $utxo, "blueprintTx": $blueprintTx }' \
   > $HOME/deposit-request.json
 
+echo "✅ Deposit request created with injected script"
+echo ""
+
 # ============================================================================
-# STEP 5: Send to Hydra
+# STEP 4: Send to Hydra
 # ============================================================================
 
-echo "📤 Step 5: Sending to Hydra..."
+echo "📤 Step 4: Sending to Hydra..."
 
 curl -s -X POST \
   --data @$HOME/deposit-request.json \
@@ -159,12 +251,13 @@ if [ -z "$CBOR_HEX" ]; then
 fi
 
 echo "✅ Valid Transaction received from Hydra!"
+echo ""
 
 # ============================================================================
-# STEP 6: Sign & Submit
+# STEP 5: Sign & Submit
 # ============================================================================
 
-echo "✍️  Step 6: Signing..."
+echo "✍️  Step 5: Signing..."
 cat > $HOME/deposit-tx-envelope.json << EOF
 {
     "type": "Tx ConwayEra",
@@ -179,7 +272,7 @@ cardano-cli conway transaction sign \
   --signing-key-file ${CREDENTIALS_PATH}/alice-node.sk \
   --out-file $HOME/deposit-signed.json
 
-echo "📤 Step 7: Submitting..."
+echo "📤 Step 6: Submitting..."
 cardano-cli conway transaction submit \
   --tx-file $HOME/deposit-signed.json \
   --testnet-magic $TESTNET_MAGIC \

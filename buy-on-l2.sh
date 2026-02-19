@@ -8,7 +8,7 @@ USER="alice"          # Chọn "alice" hoặc "bob"
 AMOUNT_TO_BUY=1000000      # Số lượng token muốn mua (1M)
 
 # Cấu hình dự án PUMP.CARDANO (AMM VERSION)
-export POLICY_ID="9b8156235099a76172cbf47651186b39a5f994a1d6af10c8d91fabc7"
+export POLICY_ID="1254a9c1293231cb25eb202af80f9f73292b25e335118d7c7f1a27d4"
 export TOKEN_NAME_HEX="50554d50" 
 export ASSET_ID="${POLICY_ID}.${TOKEN_NAME_HEX}"
 export SCRIPT_ADDR="addr_test1vzs2h7gaaclp0vanpydmcjkd6w2jpxmeyh7k9u284t59g9scejnr3"

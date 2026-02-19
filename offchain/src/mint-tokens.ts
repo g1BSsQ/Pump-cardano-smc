@@ -10,6 +10,8 @@ import {
   deserializeAddress,
 } from '@meshsdk/core';
 import blueprint from '../../plutus.json';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // ============================================================================
 // CONFIGURATION
@@ -37,6 +39,22 @@ const wallet = new MeshWallet({
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+/**
+ * Save UTXO parameters to file for script generation
+ */
+function saveUtxoParams(utxoRef: { txHash: string; outputIndex: number }) {
+  const utxoParamsPath = path.join(__dirname, '../../utxo-params.json');
+  const data = {
+    utxoTxHash: utxoRef.txHash,
+    utxoOutputIndex: utxoRef.outputIndex,
+    description: 'UTXO parameters for script generation - Auto-updated by mint script',
+    lastUpdated: new Date().toISOString(),
+  };
+  
+  fs.writeFileSync(utxoParamsPath, JSON.stringify(data, null, 2));
+  console.log('💾 Saved UTXO params to:', utxoParamsPath);
+}
 
 /**
  * Get Pump validator script with UTXO parameters
@@ -101,16 +119,20 @@ async function createPumpPool() {
       lovelace: referenceUtxo.output.amount.find(a => a.unit === 'lovelace')?.quantity
     });
 
-    // 3. Get Pump script with UTXO parameters
-    const { scriptCbor, policyId, scriptAddress } = getPumpScript({
+    // 3. Save UTXO params for future script generation
+    const utxoRef = {
       txHash: referenceUtxo.input.txHash,
       outputIndex: referenceUtxo.input.outputIndex,
-    });
+    };
+    saveUtxoParams(utxoRef);
+
+    // 4. Get Pump script with UTXO parameters
+    const { scriptCbor, policyId, scriptAddress } = getPumpScript(utxoRef);
 
     console.log('🔑 Policy ID:', policyId);
     console.log('🏊 Pool Address (Script):', scriptAddress);
 
-    // 4. Define token to mint
+    // 5. Define token to mint
     const tokenName = 'PUMP';
     const tokenQuantity = '1000000000'; // 1B tokens
     const assetName = Buffer.from(tokenName).toString('hex');
@@ -140,7 +162,7 @@ async function createPumpPool() {
     console.log(`   Virtual ADA: 30,000 ADA`);
     console.log(`   Virtual Token: 300M tokens`);
 
-    // 5. Build transaction
+    // 6. Build transaction
     console.log('\n🔨 Building transaction...');
 
     const txBuilder = new MeshTxBuilder({
@@ -195,7 +217,7 @@ async function createPumpPool() {
       )
       // Send all minted tokens to pool with 2 ADA minimum
       .txOut(scriptAddress, [
-        { unit: 'lovelace', quantity: '2000000' },  // 2 ADA minimum
+        { unit: 'lovelace', quantity: '12000000' },  // 12 ADA minimum
         { unit: policyId + assetName, quantity: tokenQuantity }  // All minted tokens
       ])
       .txOutInlineDatumValue(poolDatum)
@@ -204,11 +226,11 @@ async function createPumpPool() {
       
     console.log('✅ Transaction built successfully');
 
-    // 6. Sign transaction
+    // 7. Sign transaction
     console.log('✍️  Signing transaction...');
     const signedTx = await wallet.signTx(txBuilder.txHex);
 
-    // 7. Submit transaction
+    // 8. Submit transaction
     console.log('📤 Submitting transaction...');
     const txHash = await wallet.submitTx(signedTx);
 
@@ -231,8 +253,10 @@ async function createPumpPool() {
     console.log(`\n💡 Price Discovery:`);
     console.log(`   Initial price starts near ~0 (due to large virtual reserves)`);
     console.log(`   Price increases as tokens are bought from the pool`);
-    console.log(`   Graduation at 1B tokens sold → DEX listing`);
-
+    console.log(`   Graduation at 1B tokens sold → DEX listing`);    console.log('\n🔧 Next Steps:');
+    console.log('   1. Run: cd offchain/src && npx ts-node generate-plutus-files.ts');
+    console.log('   2. This will auto-generate scripts from saved UTXO params');
+    console.log('   3. Scripts will be saved to plutus-scripts/ directory');
   } catch (error) {
     console.error('\n❌ Error:', error);
     throw error;

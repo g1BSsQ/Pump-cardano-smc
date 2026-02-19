@@ -24,7 +24,39 @@ offchain/*.js.map
 
 # Temporary transaction files
 tmp/
-*.json
-!plutus.json
-!package.json
-!tsconfig.json
+*-blueprint.json
+*-redeemer.json
+*-datum.json
+*-datum.cbor
+*-request.json
+*-tx.json
+*-envelope.json
+*-signed.json
+*-raw.json
+deposit-*.json
+publish-*.json
+pool-datum.*
+head-utxos.json
+protocol-params.json
+new-datum.json
+buy-redeemer.json
+
+# Cardano credentials (NEVER commit private keys!)
+credentials/
+*.sk
+*.skey
+*.vk
+*.vkey
+
+# Hydra persistence
+persistence-*/
+hydra.log
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

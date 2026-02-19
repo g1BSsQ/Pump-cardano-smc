@@ -9,38 +9,24 @@ import * as path from 'path';
 import blueprint from '../../plutus.json';
 
 // ============================================================================
-// CONFIG - Provide MINT TRANSACTION HASH
-// ============================================================================
-
-// Cách 1: Dùng mint transaction hash (tự động lấy UTXO đã consume)
-const MINT_TX_HASH = '96e74ecc71e1a850552583ec6d54441300c0ea3ba7d5e7f8a025fe89497f1f96';
-
-// Cách 2: Hoặc chỉ định trực tiếp UTXO parameters
-const MANUAL_UTXO_PARAMS = {
-  utxoTxHash: 'e23de32fdae946759feb1e3f6dae6241d591c221fb874bfe2e0644d0b0e02552',
-  utxoOutputIndex: 5,
-};
-
-const USE_MANUAL = true; // Set true nếu muốn dùng MANUAL_UTXO_PARAMS
-
-// ============================================================================
-// GENERATE PLUTUS FILES
+// CONFIG - Auto-load UTXO from file
 // ============================================================================
 
 async function generatePlutusFiles() {
   console.log('🔨 Generating Plutus script files for cardano-cli...\n');
 
-  let utxoParams;
-
-  if (USE_MANUAL) {
-    console.log('📌 Using manual UTXO parameters:');
-    console.log(`   TxHash: ${MANUAL_UTXO_PARAMS.utxoTxHash}`);
-    console.log(`   Index: ${MANUAL_UTXO_PARAMS.utxoOutputIndex}\n`);
-    utxoParams = MANUAL_UTXO_PARAMS;
-  } else {
-    // Auto-fetch disabled - USE_MANUAL=true is recommended
-    throw new Error('Auto-fetch not implemented. Please set USE_MANUAL=true and provide UTXO parameters manually.');
+  // Auto-load UTXO parameters from file
+  const utxoParamsPath = path.join(__dirname, '../../utxo-params.json');
+  
+  if (!fs.existsSync(utxoParamsPath)) {
+    throw new Error(`❌ UTXO params file not found: ${utxoParamsPath}\n\nPlease run mint script first to generate utxo-params.json`);
   }
+
+  const utxoParams = JSON.parse(fs.readFileSync(utxoParamsPath, 'utf-8'));
+  
+  console.log('📌 Loaded UTXO parameters from file:');
+  console.log(`   TxHash: ${utxoParams.utxoTxHash}`);
+  console.log(`   Index: ${utxoParams.utxoOutputIndex}\n`);
 
   const outputDir = path.join(__dirname, '../../plutus-scripts');
   fs.mkdirSync(outputDir, { recursive: true });

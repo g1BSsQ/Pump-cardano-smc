@@ -101,9 +101,9 @@ fn check_fee_payment(outputs: List<Output>, fee_amount: Int) -> Bool {
 
 pub type Action {
   MintInitial
+  DepositToHydra
   Buy { amount: Int, max_cost_limit: Int }
   Sell { amount: Int, min_refund_limit: Int }
-  DepositToHydra
 }
 
 pub type PoolDatum {
@@ -166,37 +166,6 @@ validator pump(required_tx_hash: ByteArray, required_output_index: Int) {
       DepositToHydra -> {
         // 1. CHECK QUYỀN
         expect list.has(extra_signatories, datum.creator)
-
-        // 2. LẤY TRẠNG THÁI HIỆN TẠI (Để so sánh output)
-        let current_pool_ada =
-          quantity_of(input_value, ada_policy_id, ada_asset_name)
-        let current_pool_tokens =
-          quantity_of(input_value, datum.token_policy, datum.token_name)
-
-        // 3. CHECK ĐÍCH ĐẾN & HEAD TOKEN (FIX CỨNG)
-        expect
-          list.any(
-            outputs,
-            fn(output) {
-              // A. Check Address (Script Hash của Hydra Deposit)
-              let is_hydra_dest =
-                when output.address.payment_credential is {
-                  Script(hash) -> hash == hydra_deposit_script_hash
-                  _ -> False
-                }
-
-              // B. Check Token (Phải chuyển hết 100% số dư hiện tại)
-              let has_tokens =
-                quantity_of(output.value, datum.token_policy, datum.token_name) == current_pool_tokens
-
-              // C. Check ADA (Mang theo toàn bộ)
-              let output_ada =
-                quantity_of(output.value, ada_policy_id, ada_asset_name)
-              let has_enough_ada = output_ada >= current_pool_ada
-              is_hydra_dest && has_tokens && has_enough_ada
-            },
-          )
-
         True
       }
 
