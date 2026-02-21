@@ -1,6 +1,6 @@
 {
-  "utxoTxHash": "764b4075fc69837ef0580cba360eabb191a943ece91768bedde0dd393756e378",
-  "utxoOutputIndex": 1,
+  "utxoTxHash": "92cc4904e722b3e96013a685d1d5c207c735d39bd847bf1b728364cbdc18ad8c",
+  "utxoOutputIndex": 0,
   "description": "UTXO parameters for script generation - Auto-updated by mint script",
   "lastUpdated": "2026-02-19T12:29:09.007Z"
 }
